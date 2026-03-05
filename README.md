@@ -1,97 +1,63 @@
 # ジョブカン勤怠自動入力ツール
 
-平日の勤怠時間を **9:00～17:00** で自動入力するツールです。
-2つのアプローチを提供しています。
+平日の勤怠時間を **9:00～17:00** で自動入力する Tampermonkey ユーザースクリプトです。
 
----
+## 動作フロー
 
-## 方法1: Tampermonkeyユーザースクリプト（推奨）
+1. ユーザーがジョブカンにログインし、出勤簿ページを開く
+2. スクリプトの「平日を一括入力（開始）」ボタンをクリック
+3. 出勤簿から平日を読み取り、最も古い日から順に打刻修正ページへ自動遷移
+4. 出勤 9:00 / 退勤 17:00 / 備考「調整」を入力して保存
+5. 出勤簿ページに自動で戻り、次の平日へ
+6. 全平日が完了するまで繰り返し
 
-ブラウザ拡張機能を使って、ジョブカンのページ上にボタンを追加します。
-
-### セットアップ
+## セットアップ
 
 1. ブラウザに [Tampermonkey](https://www.tampermonkey.net/) をインストール
-2. Tampermonkeyの管理画面を開く
-3. 「新規スクリプト」をクリック
-4. `jobcan_autofill.user.js` の内容を貼り付けて保存
+2. Tampermonkeyの管理画面 → 「新規スクリプト」
+3. `jobcan_autofill.user.js` の内容を貼り付けて保存
 
-### 使い方
+## 使い方
 
-- ジョブカンの従業員ページ (`https://ssl.jobcan.jp/employee`) にアクセス
-- 画面右上に「勤怠自動入力」パネルが表示されます
-- **「平日を一括入力」** ボタン: 勤怠表の平日に9:00～17:00を一括入力
-- **「この日の時間を入力」** ボタン: 打刻修正ページで個別入力
+1. ジョブカンにログイン → 出勤簿ページ (`https://ssl.jobcan.jp/employee`) を開く
+2. 画面右上に「勤怠自動入力 v2.0」パネルが表示される
+3. **「対象日をプレビュー」** で入力対象の平日を確認
+4. **「平日を一括入力（開始）」** で自動処理を開始
+5. 途中で止めたい場合は **「停止」** ボタンをクリック
 
-### カスタマイズ
+## カスタマイズ
 
-スクリプト冒頭の `CONFIG` で時間を変更できます:
+スクリプト冒頭の `CONFIG` を編集:
 
 ```javascript
 const CONFIG = {
   startTime: "9:00",   // 出勤時間
   endTime: "17:00",    // 退勤時間
+  remarks: "調整",      // 備考
+  delayMs: 2000,        // ページ遷移の待機時間(ms)
 };
 ```
 
----
+## セレクタの調整
 
-## 方法2: Python + Selenium スクリプト
+ジョブカンの画面構成は会社設定やバージョンにより異なります。
+動作しない場合は、スクリプト内の `SELECTORS` を実際のページに合わせて修正してください。
 
-コマンドラインから自動実行するスクリプトです。
+### 確認手順
 
-### セットアップ
+1. ジョブカンの出勤簿・打刻修正ページをブラウザで開く
+2. F12 → 開発者ツールのコンソールに以下を貼り付けて実行:
 
-```bash
-pip install selenium webdriver-manager
+```javascript
+// ページ上のフォーム要素を一覧表示
+document.querySelectorAll('input, select, textarea, button').forEach(el => {
+  console.log(`<${el.tagName} name="${el.name}" id="${el.id}" type="${el.type}" class="${el.className}">`);
+});
 ```
 
-### 環境変数の設定
+3. 出力されたセレクタ情報をもとに `SELECTORS` を修正
 
-```bash
-export JOBCAN_EMAIL="your_email@example.com"
-export JOBCAN_PASSWORD="your_password"
-export JOBCAN_CLIENT_ID="your_company_id"  # 会社IDが必要な場合
-```
+## 注意事項
 
-### 使い方
-
-```bash
-# 今月の平日を自動入力
-python jobcan_autofill_selenium.py
-
-# 対象日を確認（ドライラン）
-python jobcan_autofill_selenium.py --dry-run
-
-# 特定の月を指定
-python jobcan_autofill_selenium.py --year 2026 --month 3
-
-# 時間をカスタマイズ
-python jobcan_autofill_selenium.py --start-time 8:30 --end-time 17:30
-
-# ヘッドレスモード（ブラウザ非表示）
-python jobcan_autofill_selenium.py --headless
-
-# id.jobcan.jp 経由でログイン
-python jobcan_autofill_selenium.py --login-method id
-```
-
-### オプション一覧
-
-| オプション | 説明 | デフォルト |
-|------------|------|-----------|
-| `--year` | 対象年 | 今年 |
-| `--month` | 対象月 | 今月 |
-| `--start-time` | 出勤時間 | 9:00 |
-| `--end-time` | 退勤時間 | 17:00 |
-| `--dry-run` | 対象日の確認のみ | - |
-| `--headless` | ブラウザ非表示で実行 | - |
-| `--login-method` | ログイン方法 (employee/id) | employee |
-
----
-
-## 重要な注意事項
-
-- **セレクタの調整が必要です**: ジョブカンの画面構成は会社設定やアップデートにより異なる場合があります。実際のページのDOM構造をブラウザの開発者ツール (F12) で確認し、セレクタを調整してください。
-- **祝日判定**: 簡易的な祝日判定を含んでいますが、振替休日や特別な休日は含まれていません。必要に応じてカスタマイズしてください。
-- **自己責任**: 勤怠データの自動入力は会社の規定に従って使用してください。
+- **セレクタの調整が必要な可能性があります**: 初回は「対象日をプレビュー」で正しく日付が検出されるか確認してください
+- **自己責任**: 勤怠データの自動入力は会社の規定に従って使用してください
