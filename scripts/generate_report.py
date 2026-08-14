@@ -688,7 +688,10 @@ def main():
     html = render_html(period_label, stats, sections_html)
 
     REPORTS_DIR.mkdir(exist_ok=True)
-    out_path = REPORTS_DIR / f"report_{quarter_labels[0]}_{quarter_labels[-1]}.html"
+    # 固定ファイル名にすることで、データ更新のたびに同じパスが上書きされる
+    # (過去の版が見たければ git log で辿れる)。GitHub Pages等で常に
+    # 最新を指す1つのURLとして公開する前提の設計。
+    out_path = REPORTS_DIR / "report.html"
     out_path.write_text(html, encoding="utf-8")
     print(f"Wrote {out_path}")
 
