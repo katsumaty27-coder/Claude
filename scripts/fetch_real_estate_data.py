@@ -60,16 +60,16 @@ def main():
     # 実行日時
     now = datetime.now()
     year = now.year
-    quarter = (now.month - 1) // 3 + 1
+    current_quarter = (now.month - 1) // 3 + 1
 
     # 不動産取引価格データは過去のデータのみ利用可能なため、1つ前の四半期を取得
     # 例：8月実行時(Q3)→ Q2のデータを取得
-    quarter -= 1
+    quarter = current_quarter - 1
     if quarter < 1:
         quarter = 4
         year -= 1
 
-    print(f"Fetching data for {year}Q{quarter}", file=sys.stderr)
+    print(f"Current date: {now.strftime('%Y-%m-%d')}, Current Q: {current_quarter}, Target Q: {year}Q{quarter}", file=sys.stderr)
 
     # 出力ディレクトリ
     output_dir = Path(__file__).parent.parent / "data" / f"{year}Q{quarter}"
