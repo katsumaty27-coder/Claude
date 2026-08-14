@@ -49,17 +49,21 @@ jobs:
           fi
           python scripts/backfill_historical_data.py $ARGS
 
+      - name: Regenerate analysis report
+        run: |
+          python scripts/generate_report.py
+
       - name: Commit and push data
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          git add data/
+          git add data/ reports/
 
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: Backfill historical real estate data ($(date +'%Y-%m-%d'))"
+            git commit -m "chore: Backfill historical real estate data and regenerate report ($(date +'%Y-%m-%d'))"
             git push origin main
           fi
 
