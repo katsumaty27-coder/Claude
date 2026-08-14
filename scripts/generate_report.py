@@ -353,6 +353,88 @@ def strip_plot(categories, groups, colors, *, width=760, height=360,
     return "".join(parts)
 
 
+def line_chart(x_categories, series, *, width=760, height=380,
+                value_fmt=lambda v: f"{v:,.0f}", y_suffix="", label_top_n=2):
+    """series = [(label, color, [values...]), ...] 複数系列の時系列推移。
+    値がないx点は None を許容(線を切る)。上位/下位 label_top_n 本のみ
+    終端に直接ラベルし、残りは凡例+ホバーで確認する(収束による重なりを回避)。
+    """
+    margin = {"top": 24, "right": 88, "bottom": 44, "left": 64}
+    plot_w = width - margin["left"] - margin["right"]
+    plot_h = height - margin["top"] - margin["bottom"]
+
+    all_vals = [v for _, _, vals in series for v in vals if v is not None]
+    vmax = nice_max(max(all_vals)) if all_vals else 1
+    vmin = 0
+
+    n = len(x_categories)
+
+    def sx(i):
+        return margin["left"] + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+
+    def sy(v):
+        return margin["top"] + plot_h * (1 - (v - vmin) / (vmax - vmin))
+
+    parts = [f'<svg viewBox="0 0 {width} {height}" class="chart-svg" role="img" '
+             f'aria-label="時系列推移グラフ">']
+
+    steps = 4
+    for i in range(steps + 1):
+        v = vmax * i / steps
+        y = sy(v)
+        parts.append(f'<line x1="{margin["left"]}" y1="{y:.1f}" x2="{width - margin["right"]}" '
+                      f'y2="{y:.1f}" class="gridline" />')
+        parts.append(f'<text x="{margin["left"] - 8}" y="{y + 4:.1f}" class="axis-label" '
+                      f'text-anchor="end">{v:,.0f}{y_suffix}</text>')
+
+    y0 = sy(vmin)
+    parts.append(f'<line x1="{margin["left"]}" y1="{y0:.1f}" x2="{width - margin["right"]}" '
+                  f'y2="{y0:.1f}" class="baseline" />')
+
+    for i, cat in enumerate(x_categories):
+        parts.append(f'<text x="{sx(i):.1f}" y="{height - margin["bottom"] + 20:.1f}" '
+                      f'class="axis-label" text-anchor="middle">{esc(cat)}</text>')
+
+    # 終端値でソートし、上位/下位のみ直接ラベル
+    ends = [(label, vals[-1]) for label, _, vals in series if vals and vals[-1] is not None]
+    ends.sort(key=lambda t: t[1])
+    label_set = set(l for l, _ in ends[:label_top_n]) | set(l for l, _ in ends[-label_top_n:])
+
+    for label, color, values in series:
+        light, dark = color
+        pts = [(sx(i), sy(v)) for i, v in enumerate(values) if v is not None]
+        if len(pts) >= 2:
+            d = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+            parts.append(f'<path d="{d}" fill="none" stroke="{light}" stroke-width="2" '
+                          f'stroke-linejoin="round" stroke-linecap="round" '
+                          f'class="line-mark" data-light="{light}" data-dark="{dark}" />')
+        for i, v in enumerate(values):
+            if v is None:
+                continue
+            px, py = sx(i), sy(v)
+            parts.append(
+                f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4" fill="{light}" '
+                f'class="dot-mark" data-light="{light}" data-dark="{dark}" '
+                f'data-tooltip="{esc(label)} {esc(x_categories[i])}: {esc(value_fmt(v))}{y_suffix}" />'
+            )
+        if label in label_set and pts:
+            lx, ly = pts[-1]
+            parts.append(f'<text x="{lx + 8:.1f}" y="{ly + 4:.1f}" class="line-end-label" '
+                          f'data-light="{light}" data-dark="{dark}">{esc(label)}</text>')
+
+    parts.append("</svg>")
+
+    legend = '<div class="legend">'
+    for label, color, _ in series:
+        light, dark = color
+        legend += (f'<span class="legend-item"><span class="legend-swatch" '
+                   f'data-light="{light}" data-dark="{dark}" '
+                   f'style="background:{light}"></span>{esc(label)}</span>')
+    legend += "</div>"
+
+    return "".join(parts) + legend
+
+
 def scatter_chart(points, color, *, width=760, height=380, x_label="", y_label=""):
     """points = [(x, y, tooltip), ...] 単色散布図"""
     margin = {"top": 24, "right": 20, "bottom": 56, "left": 64}
@@ -431,41 +513,57 @@ def main():
         print("No data found in data/", file=sys.stderr)
         sys.exit(1)
 
-    # 現状は最新1四半期のみ対応(将来複数四半期が溜まれば時系列化する)
-    quarter_dir = quarter_dirs[-1]
-    quarter_label = quarter_dir.name
-    report_year = int(quarter_label.split("Q")[0])
+    quarter_labels = [d.name for d in quarter_dirs]
+    latest_label = quarter_labels[-1]
 
-    raw = load_quarter(quarter_dir)
-    records = enrich(raw, report_year)
-    mansion = [r for r in records if r.get("Type") == "中古マンション等"]
+    # --- 全四半期を読み込み、四半期別・プール(全期間)の両方を作る ---
+    per_quarter_mansion = {}
+    pooled_mansion = []
+    total_raw_count = 0
+
+    for d in quarter_dirs:
+        label = d.name
+        year = int(label.split("Q")[0])
+        raw = load_quarter(d)
+        total_raw_count += len(raw)
+        records = enrich(raw, year)
+        mansion_q = [r for r in records if r.get("Type") == "中古マンション等"]
+        for r in mansion_q:
+            r["_quarter_label"] = label
+        per_quarter_mansion[label] = mansion_q
+        pooled_mansion.extend(mansion_q)
+
+    mansion = pooled_mansion  # セクション②〜⑥はプール(全期間)を使う
     family_scope = [r for r in mansion if is_family_scope(r)]
+
+    period_label = f"{quarter_labels[0]}〜{quarter_labels[-1]}（{len(quarter_labels)}四半期）"
 
     sections_html = []
 
     # --- 概要 stat tiles ---
     stats = "".join([
-        stat_tile("対象四半期", quarter_label),
-        stat_tile("総取引件数", f"{len(raw):,}"),
+        stat_tile("対象期間", period_label),
+        stat_tile("総取引件数", f"{total_raw_count:,}"),
         stat_tile("中古マンション等", f"{len(mansion):,}"),
         stat_tile("3LDK以上・70㎡以上", f"{len(family_scope):,}",
-                   "対象9区中7区で発生"),
+                   f"{len(quarter_labels)}四半期の累計"),
     ])
 
-    # --- 1. 区別 ㎡単価 ---
-    by_ward_unitprice = {w: median([r["_unit_price_man"] for r in mansion
-                                     if r["city_name"] == w]) for w in WARD_ORDER}
-    n_by_ward = {w: sum(1 for r in mansion if r["city_name"] == w) for w in WARD_ORDER}
-    chart1 = bar_chart(
-        WARD_ORDER,
-        [by_ward_unitprice[w] for w in WARD_ORDER],
-        [WARD_COLOR[w] for w in WARD_ORDER],
-        value_fmt=lambda v: f"{v:,.0f}",
-        y_suffix="万円/㎡",
-        n_labels=[n_by_ward[w] for w in WARD_ORDER],
+    # --- 1. 区別 ㎡単価の時系列推移 ---
+    line_series_1 = []
+    for w in WARD_ORDER:
+        values = []
+        for label in quarter_labels:
+            vals = [r["_unit_price_man"] for r in per_quarter_mansion[label]
+                    if r["city_name"] == w]
+            values.append(median(vals))
+        line_series_1.append((w, WARD_COLOR[w], values))
+    chart1 = line_chart(
+        quarter_labels, line_series_1,
+        value_fmt=lambda v: f"{v:,.0f}", y_suffix="万円/㎡",
     )
-    sections_html.append(("sec1", "① 区別 ㎡単価(中央値)",
-        "中古マンション等・全間取り対象。1四半期のみのデータのため、四半期が積み重なれば折れ線の推移グラフに発展させる予定。",
+    sections_html.append(("sec1", "① 区別 ㎡単価の推移(中央値)",
+        f"中古マンション等・全間取り対象。{period_label}の四半期ごとの中央値をつないだ推移。",
         chart1))
 
     # --- 2. 予算2億円で狙える面積帯 ---
@@ -481,7 +579,7 @@ def main():
         y_suffix="㎡",
     )
     sections_html.append(("sec2", "② 2億円以内で狙える面積帯(3LDK以上・70㎡以上)",
-        "各点が1取引。横棒が区ごとの中央値。同じ予算でも区によって狙える広さが大きく異なる。",
+        f"{period_label}の累計。各点が1取引、横棒が区ごとの中央値。同じ予算でも区によって狙える広さが大きく異なる。",
         chart2))
 
     # --- 3. 築年数と価格の関係 ---
@@ -496,7 +594,7 @@ def main():
         x_label="築年数(年)", y_label="㎡単価(万円/㎡)",
     )
     sections_html.append(("sec3", "③ 築年数と価格(㎡単価)の関係",
-        "3LDK以上・70㎡以上のセグメント。築年数が浅いほど㎡単価が高い傾向が見えるか確認する。",
+        f"{period_label}累計、3LDK以上・70㎡以上のセグメント。築年数は各取引が発生した四半期時点での年数。",
         chart3))
 
     # --- 4. 間取り別の価格分布 ---
@@ -517,7 +615,8 @@ def main():
         bar_cap=40,
     )
     sections_html.append(("sec4", "④ 間取り別の価格分布(㎡単価・中央値)",
-        "対象9区の中古マンション等 全540件。「その他」はワンルーム系・複合間取り・不明を含む。",
+        f"対象9区の中古マンション等 {period_label}累計 全{len(mansion):,}件。"
+        f"「その他」はワンルーム系・複合間取り・不明を含む。",
         chart4))
 
     # --- 5. リノベーション有無の価格差 ---
@@ -536,7 +635,8 @@ def main():
         value_fmt=lambda v: f"{v:,.0f}", y_suffix="万円/㎡",
     )
     sections_html.append(("sec5", "⑤ リノベーション有無による価格差(間取り別・㎡単価中央値)",
-        "同じ間取りで比較することで、単純な広さの違いによる誤差を避けている。「不明」区分(未記載)は除外。",
+        f"{period_label}累計。同じ間取りで比較することで、単純な広さの違いによる誤差を避けている。"
+        f"「不明」区分(未記載)は除外。",
         chart5))
 
     # --- 6. 地区(町丁目)レベルの粒度: 港区の例 ---
@@ -564,31 +664,36 @@ def main():
         bar_cap=40,
     )
     sections_html.append(("sec6", "⑥ 地区(町丁目)レベルの粒度 — 港区の例",
-        "同じ港区内でも地区によって水準が異なる。件数の少ない地区(n=1〜2)は参考値。",
+        f"{period_label}累計。同じ港区内でも地区によって水準が異なる。件数の少ない地区は参考値。",
         chart6))
 
-    # --- 7. 対象セグメントの取引件数(流動性) ---
-    seg_counts = {w: sum(1 for r in family_scope if r["city_name"] == w) for w in WARD_ORDER}
-    chart7 = bar_chart(
-        WARD_ORDER,
-        [seg_counts[w] for w in WARD_ORDER],
-        [WARD_COLOR[w] for w in WARD_ORDER],
+    # --- 7. 対象セグメントの取引件数(流動性)の推移 ---
+    line_series_7 = []
+    for w in WARD_ORDER:
+        values = []
+        for label in quarter_labels:
+            count = sum(1 for r in per_quarter_mansion[label]
+                        if r["city_name"] == w and is_family_scope(r))
+            values.append(count)
+        line_series_7.append((w, WARD_COLOR[w], values))
+    chart7 = line_chart(
+        quarter_labels, line_series_7,
         value_fmt=lambda v: f"{v:.0f}", y_suffix="件",
     )
-    sections_html.append(("sec7", "⑦ 対象セグメントの取引件数(流動性)",
-        "3LDK以上・70㎡以上、1四半期あたりの件数。区によっては月1件未満の水準で、"
-        "複数四半期の蓄積が前提の指標であることが分かる。",
+    sections_html.append(("sec7", "⑦ 対象セグメントの取引件数(流動性)の推移",
+        "3LDK以上・70㎡以上、四半期ごとの件数。区によっては月1件未満の水準で上下も激しく、"
+        "単一四半期では判断が難しいことが分かる。",
         chart7))
 
-    html = render_html(quarter_label, stats, sections_html)
+    html = render_html(period_label, stats, sections_html)
 
     REPORTS_DIR.mkdir(exist_ok=True)
-    out_path = REPORTS_DIR / f"report_{quarter_label}.html"
+    out_path = REPORTS_DIR / f"report_{quarter_labels[0]}_{quarter_labels[-1]}.html"
     out_path.write_text(html, encoding="utf-8")
     print(f"Wrote {out_path}")
 
 
-def render_html(quarter_label, stats_html, sections):
+def render_html(period_label, stats_html, sections):
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     section_html = ""
     for sec_id, title, note, chart_svg in sections:
@@ -684,6 +789,8 @@ def render_html(quarter_label, stats_html, sections):
   .bar-mark, .dot-mark {{ cursor: pointer; transition: opacity 0.1s; }}
   .bar-mark:hover, .dot-mark:hover {{ opacity: 0.75; }}
   .dot-mark {{ stroke: var(--surface-1); stroke-width: 2; }}
+  .line-mark {{ opacity: 0.92; }}
+  .line-end-label {{ font-size: 11px; font-weight: 600; fill: var(--text-primary); }}
 
   .legend {{ display: flex; gap: 16px; flex-wrap: wrap; padding: 4px 0 16px; }}
   .legend-item {{ display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--text-secondary); }}
@@ -701,7 +808,7 @@ def render_html(quarter_label, stats_html, sections):
 
 <div class="wrap">
   <h1>東京23区 マンション価格分析レポート</h1>
-  <p class="subtitle">対象四半期: {esc(quarter_label)} ／ 生成日時: {esc(generated)} ／
+  <p class="subtitle">対象期間: {esc(period_label)} ／ 生成日時: {esc(generated)} ／
     データ出典: 国土交通省 不動産情報ライブラリ(不動産取引価格情報)</p>
 
   <div class="stats-row">{stats_html}</div>
@@ -711,7 +818,8 @@ def render_html(quarter_label, stats_html, sections):
     対象9区: 千代田区・中央区・港区・新宿区・文京区・渋谷区・品川区・目黒区(麻布台ヒルズ勤務・車通勤20〜25分圏)。
     予算上限2億円、ファミリー向け(3LDK以上・70㎡以上)を軸に集計。
     最寄駅・駅距離のデータはこのAPIエンドポイントには含まれないため、駅距離分析は今回対象外。
-    現時点では2026Q1の1四半期分のみのため、①の㎡単価は今後四半期が積み重なるにつれて時系列の推移グラフへ発展させる予定。
+    ②〜⑥は対象期間全体をプールした集計、①・⑦は四半期ごとの時系列推移。
+    最新四半期は買主アンケートの回収が完了しておらず件数が少なめに出ることがある点に注意。
   </footer>
 </div>
 
@@ -736,9 +844,12 @@ def render_html(quarter_label, stats_html, sections):
     const dark = themeAttr ? themeAttr === 'dark' : isDark;
     document.querySelectorAll('[data-light]').forEach(el => {{
       const color = dark ? el.getAttribute('data-dark') : el.getAttribute('data-light');
-      if (el.tagName === 'circle' || el.classList.contains('legend-swatch')) {{
-        if (el.tagName === 'circle') el.setAttribute('fill', color);
-        else el.style.background = color;
+      if (el.tagName === 'circle') {{
+        el.setAttribute('fill', color);
+      }} else if (el.tagName === 'path' && el.classList.contains('line-mark')) {{
+        el.setAttribute('stroke', color);
+      }} else if (el.classList.contains('legend-swatch')) {{
+        el.style.background = color;
       }} else {{
         el.setAttribute('fill', color);
       }}
