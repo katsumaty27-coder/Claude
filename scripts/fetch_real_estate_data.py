@@ -62,6 +62,15 @@ def main():
     year = now.year
     quarter = (now.month - 1) // 3 + 1
 
+    # 不動産取引価格データは過去のデータのみ利用可能なため、1つ前の四半期を取得
+    # 例：8月実行時(Q3)→ Q2のデータを取得
+    quarter -= 1
+    if quarter < 1:
+        quarter = 4
+        year -= 1
+
+    print(f"Fetching data for {year}Q{quarter}", file=sys.stderr)
+
     # 出力ディレクトリ
     output_dir = Path(__file__).parent.parent / "data" / f"{year}Q{quarter}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -84,6 +93,12 @@ def main():
 
             print(f"  ✓ {len(result.get('data', []))} records", file=sys.stderr)
 
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                print(f"  ✗ Data not found (404): Check year/quarter or API endpoint", file=sys.stderr)
+            else:
+                print(f"  ✗ HTTP Error: {e}", file=sys.stderr)
+            continue
         except requests.exceptions.RequestException as e:
             print(f"  ✗ Error: {e}", file=sys.stderr)
             continue
