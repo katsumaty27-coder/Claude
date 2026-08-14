@@ -1,0 +1,68 @@
+name: Backfill Historical Real Estate Data
+
+on:
+  # ワンタイムの過去分一括取得用。スケジュール実行はしない。
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: '取得開始年(例: 2024)'
+        required: false
+        default: '2024'
+      start_quarter:
+        description: '取得開始四半期(1-4)'
+        required: false
+        default: '1'
+      force:
+        description: '既に取得済みの四半期も再取得する'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  backfill-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Backfill historical data
+        env:
+          MLIT_API_KEY: ${{ secrets.MLIT_API_KEY }}
+        run: |
+          ARGS="--start-year ${{ inputs.start_year }} --start-quarter ${{ inputs.start_quarter }}"
+          if [ "${{ inputs.force }}" = "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+          python scripts/backfill_historical_data.py $ARGS
+
+      - name: Commit and push data
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add data/
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: Backfill historical real estate data ($(date +'%Y-%m-%d'))"
+            git push origin main
+          fi
+
+      - name: Report execution
+        run: |
+          echo "✓ Backfill completed at $(date)"
