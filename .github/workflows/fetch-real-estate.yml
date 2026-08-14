@@ -37,11 +37,13 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
 
-          # 変更があればコミット
-          if git diff --quiet data/; then
+          git add data/
+
+          # git diff --quiet は未追跡(新規)ファイルを検知しないため、
+          # add した後に --staged で判定する
+          if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git add data/
             git commit -m "chore: Fetch real estate data ($(date +'%Y-%m-%d'))"
             git push origin main
           fi
