@@ -1,0 +1,51 @@
+name: Fetch Real Estate Data
+
+on:
+  # 毎月15日の日本時間9:00(UTC 0:00)に実行
+  schedule:
+    - cron: '0 0 15 * *'
+
+  # 手動トリガー: Actions タブからの実行を有効化
+  workflow_dispatch:
+
+jobs:
+  fetch-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Fetch real estate data
+        env:
+          MLIT_API_KEY: ${{ secrets.MLIT_API_KEY }}
+        run: |
+          python scripts/fetch_real_estate_data.py
+
+      - name: Commit and push data
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          # 変更があればコミット
+          if git diff --quiet; then
+            echo "No changes to commit"
+          else
+            git add data/
+            git commit -m "chore: Fetch real estate data ($(date +'%Y-%m-%d'))"
+            git push origin claude/tokyo-mansion-price-tracking-vbsr8t
+          fi
+
+      - name: Report execution
+        run: |
+          echo "✓ Fetch completed at $(date)"
